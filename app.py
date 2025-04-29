@@ -8,6 +8,7 @@ import os
 import io
 from openpyxl import load_workbook
 from zipfile import ZipFile
+import base64
 
 st.title("Invoice Processing Tool with ZIP or Single PDF Upload")
 
@@ -25,15 +26,16 @@ for folder in [temp_folder, final_folder, final_invoice_folder]:
     os.makedirs(folder, exist_ok=True)
 
 line_pattern = re.compile(
-    r"^\s*(\d+)\s+"
-    r"(\S+)\s+"
-    r"(.+?)\s+"
-    r"(\d+(?:\.?\d*)?(?:EA|PAC))\s+"
-    r"([\d\.]+)\s+"
+    r"^\s*(\d+)\s+"  # pattern for extracting invoice data
+    r"(\S+)\s+" 
+    r"(.+?)\s+" 
+    r"(\d+(?:\.?\d*)?(?:EA|PAC))\s+" 
+    r"([\d\.]+)\s+" 
     r"([\d\.]+)\s*$"
 )
 
 def extract_invoice_data(file):
+    # Extract invoice data from the PDF
     products = []
     invoice_number = pic_number = freight_charges = gst_amount = total_tax_included = order_number = ship_to_address = None
     skip = False
@@ -176,7 +178,7 @@ if (zip_file or pdf_file) and paf_file and template_file:
             for idx, product in final_df.iterrows():
                 ws[f"A{start_row + idx}"] = product["SKU"]
                 ws[f"B{start_row + idx}"] = product["Total Quantity"]
-                ws[f"C{start_row + idx}"] = round(float(product["Unit Cost Price"]), 2)
+                ws[f"C{start_row + idx}"] = product["Unit Cost Price"]
 
             final_invoice_path = os.path.join(final_invoice_folder, f"{base_name}_final_invoice.xlsx")
             wb.save(final_invoice_path)
@@ -206,8 +208,11 @@ if (zip_file or pdf_file) and paf_file and template_file:
 
         st.success("✅ Processing Complete!")
 
+        # Generate a download link for the Summary Report
         with open(summary_file, "rb") as f:
-            st.download_button("Download Summary Report", f, "Summary_Report.xlsx")
+            b64 = base64.b64encode(f.read()).decode()
+            href = f'<a href="data:application/octet-stream;base64,{b64}" download="invoice_summary.xlsx">📥 Download Invoice Summary</a>'
+            st.markdown(href, unsafe_allow_html=True)
 
         st.write("### Download Final Invoices")
         for fname in os.listdir(final_invoice_folder):
@@ -219,16 +224,4 @@ if (zip_file or pdf_file) and paf_file and template_file:
         # Final Invoices ZIP
         zip_buffer = io.BytesIO()
         with ZipFile(zip_buffer, "w") as zipf:
-            for fname in os.listdir(final_invoice_folder):
-                zipf.write(os.path.join(final_invoice_folder, fname), arcname=fname)
-        zip_buffer.seek(0)
-        st.download_button("Download All Final Invoices (ZIP)", zip_buffer, "Final_Invoices.zip", mime="application/zip")
-
-        # Raw Invoices ZIP
-        raw_zip_buffer = io.BytesIO()
-        with ZipFile(raw_zip_buffer, "w") as zipf:
-            for fname in os.listdir(temp_folder):
-                if fname.endswith(".xlsx"):
-                    zipf.write(os.path.join(temp_folder, fname), arcname=fname)
-        raw_zip_buffer.seek(0)
-        st.download_button("Download Extracted Raw Invoice Data (ZIP)", raw_zip_buffer, "Extracted_Raw_Invoices.zip", mime="application/zip")
+            for fname
