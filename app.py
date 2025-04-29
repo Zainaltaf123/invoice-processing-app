@@ -218,7 +218,7 @@ if (zip_file or pdf_file) and paf_file and template_file:
         # Create the Excel summary file
         summary_df = pd.DataFrame(summary_list)
         missing_products_df = pd.DataFrame(missing_products_list)
-        paf_data_df = paf_df[["Valiant/RGR SKU","GlobalTill SKU", "Product Name *", "Units Per Case"]]
+        paf_data_df = paf_df[["Valiant/RGR SKU","GlobalTill SKU", "Product Name", "Units Per Case"]]
 
         with pd.ExcelWriter(summary_file, engine="openpyxl") as writer:
             summary_df.to_excel(writer, sheet_name="Summary Report", index=False)
