@@ -11,7 +11,6 @@ from zipfile import ZipFile
 
 st.title("Invoice Processing Tool with ZIP or Single PDF Upload")
 
-# === Upload Section ===
 zip_file = st.file_uploader("Upload ZIP of Invoices (Optional)", type=["zip"])
 pdf_file = st.file_uploader("Or Upload a Single Invoice PDF", type=["pdf"])
 paf_file = st.file_uploader("Upload PAF Excel", type=["xlsx"])
@@ -132,6 +131,10 @@ if (zip_file or pdf_file) and paf_file and template_file:
             invoice_df, invoice_number, pic_number, freight, gst, total_tax, order_number, ship_to, skip = extract_invoice_data(pdf_stream)
             base_name = os.path.splitext(os.path.basename(filename))[0]
 
+            # Save raw extracted data
+            raw_invoice_path = os.path.join(temp_folder, f"{base_name}_raw_invoice.xlsx")
+            invoice_df.to_excel(raw_invoice_path, index=False)
+
             if skip:
                 summary_list.append({
                     "Invoice File": base_name,
@@ -206,23 +209,26 @@ if (zip_file or pdf_file) and paf_file and template_file:
         with open(summary_file, "rb") as f:
             st.download_button("Download Summary Report", f, "Summary_Report.xlsx")
 
-        st.write("### Download Final Invoices (individually or all together)")
-
+        st.write("### Download Final Invoices")
         for fname in os.listdir(final_invoice_folder):
             if fname.endswith(".xlsx"):
                 path = os.path.join(final_invoice_folder, fname)
                 with open(path, "rb") as f:
-                    st.download_button(f"Download {fname}", f, fname, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    st.download_button(f"Download {fname}", f, fname)
 
+        # Final Invoices ZIP
         zip_buffer = io.BytesIO()
         with ZipFile(zip_buffer, "w") as zipf:
             for fname in os.listdir(final_invoice_folder):
                 zipf.write(os.path.join(final_invoice_folder, fname), arcname=fname)
         zip_buffer.seek(0)
+        st.download_button("Download All Final Invoices (ZIP)", zip_buffer, "Final_Invoices.zip", mime="application/zip")
 
-        st.download_button(
-            label="Download All Final Invoices (ZIP)",
-            data=zip_buffer,
-            file_name="Final_Invoices.zip",
-            mime="application/zip"
-        )
+        # Raw Invoices ZIP
+        raw_zip_buffer = io.BytesIO()
+        with ZipFile(raw_zip_buffer, "w") as zipf:
+            for fname in os.listdir(temp_folder):
+                if fname.endswith(".xlsx"):
+                    zipf.write(os.path.join(temp_folder, fname), arcname=fname)
+        raw_zip_buffer.seek(0)
+        st.download_button("Download Extracted Raw Invoice Data (ZIP)", raw_zip_buffer, "Extracted_Raw_Invoices.zip", mime="application/zip")
