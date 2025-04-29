@@ -125,6 +125,7 @@ if (zip_file or pdf_file) and paf_file and template_file:
 
         total_files = len(pdf_sources)
         summary_list = []
+        missing_products_list = []
         progress_bar = st.progress(0)
         status_text = st.empty()
 
@@ -201,10 +202,28 @@ if (zip_file or pdf_file) and paf_file and template_file:
                 "Calculated Total Payable": round(calculated_total, 2)
             })
 
+            # Add missing products
+            missing_products = merged_df[merged_df["SKU"].isna()]
+            for idx, row in missing_products.iterrows():
+                missing_products_list.append({
+                    "Invoice File": base_name,
+                    "Product": row["Product"],
+                    "Description": row["Description"],
+                    "Quantity": row["Quantity"],
+                    "Gross Price": row["Gross Price"]
+                })
+
             progress_bar.progress(i / total_files)
 
+        # Create the Excel summary file
         summary_df = pd.DataFrame(summary_list)
-        summary_df.to_excel(summary_file, index=False)
+        missing_products_df = pd.DataFrame(missing_products_list)
+        paf_data_df = paf_df[["Valiant/RGR SKU","GlobalTill SKU", "Product Description", "Units Per Case", "Unit Cost Price"]]
+
+        with pd.ExcelWriter(summary_file, engine="openpyxl") as writer:
+            summary_df.to_excel(writer, sheet_name="Summary Report", index=False)
+            missing_products_df.to_excel(writer, sheet_name="Missing Products", index=False)
+            paf_data_df.to_excel(writer, sheet_name="PAF Data", index=False)
 
         st.success("✅ Processing Complete!")
 
@@ -224,4 +243,9 @@ if (zip_file or pdf_file) and paf_file and template_file:
         # Final Invoices ZIP
         zip_buffer = io.BytesIO()
         with ZipFile(zip_buffer, "w") as zipf:
-            for fname
+            for fname in os.listdir(final_invoice_folder):
+                if fname.endswith(".xlsx"):
+                    zipf.write(os.path.join(final_invoice_folder, fname), fname)
+
+        zip_buffer.seek(0)
+        st.download_button("Download All Final Invoices as ZIP", zip_buffer, "final_invoices.zip")
