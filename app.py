@@ -9,9 +9,11 @@ import io
 from openpyxl import load_workbook
 from zipfile import ZipFile
 
-st.title("Invoice Processing Tool with Bulk ZIP Download")
+st.title("Invoice Processing Tool with ZIP or Single PDF Upload")
 
-zip_file = st.file_uploader("Upload Invoices ZIP", type=["zip"])
+# === Upload Section ===
+zip_file = st.file_uploader("Upload ZIP of Invoices (Optional)", type=["zip"])
+pdf_file = st.file_uploader("Or Upload a Single Invoice PDF", type=["pdf"])
 paf_file = st.file_uploader("Upload PAF Excel", type=["xlsx"])
 template_file = st.file_uploader("Upload Invoice Template Excel", type=["xlsx"])
 
@@ -45,7 +47,6 @@ def extract_invoice_data(file):
         invoice_number = inv_m.group(1) if inv_m else None
         pic_number = pic_m.group(1) if pic_m else None
 
-        # NEW robust logic for order number
         order_number = ""
         for line in first_text.splitlines():
             match = re.search(r"\b(RGRHO\w+|CCAO\w+)\b", line)
@@ -96,15 +97,13 @@ def extract_invoice_data(file):
     df = pd.DataFrame(products)
     return df, invoice_number, pic_number, freight_charges, gst_amount, total_tax_included, order_number, ship_to_address, skip
 
-if zip_file and paf_file and template_file:
+if (zip_file or pdf_file) and paf_file and template_file:
     if st.button("Process Invoices"):
 
         for folder in [temp_folder, final_folder, final_invoice_folder]:
             for f in os.listdir(folder):
                 os.remove(os.path.join(folder, f))
 
-        with open("uploaded_invoices.zip", "wb") as f:
-            f.write(zip_file.getbuffer())
         with open("uploaded_paf.xlsx", "wb") as f:
             f.write(paf_file.getbuffer())
         with open("uploaded_template.xlsx", "wb") as f:
@@ -114,114 +113,116 @@ if zip_file and paf_file and template_file:
         paf_df.columns = paf_df.columns.str.strip()
         paf_df = paf_df.drop_duplicates(subset=["Valiant/RGR SKU"])
 
-        with zipfile.ZipFile("uploaded_invoices.zip", 'r') as zip_ref:
-            pdf_files = [f for f in zip_ref.namelist() if f.lower().endswith('.pdf')]
-            total_files = len(pdf_files)
+        pdf_sources = []
+        if zip_file:
+            with open("uploaded_invoices.zip", "wb") as f:
+                f.write(zip_file.getbuffer())
+            with zipfile.ZipFile("uploaded_invoices.zip", 'r') as zip_ref:
+                pdf_sources = [(f, zip_ref.open(f)) for f in zip_ref.namelist() if f.lower().endswith('.pdf')]
+        elif pdf_file:
+            pdf_sources = [(pdf_file.name, pdf_file)]
 
-            summary_list = []
+        total_files = len(pdf_sources)
+        summary_list = []
+        progress_bar = st.progress(0)
+        status_text = st.empty()
 
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+        for i, (filename, pdf_stream) in enumerate(pdf_sources, start=1):
+            status_text.text(f"Processing {filename} ({i}/{total_files})...")
+            invoice_df, invoice_number, pic_number, freight, gst, total_tax, order_number, ship_to, skip = extract_invoice_data(pdf_stream)
+            base_name = os.path.splitext(os.path.basename(filename))[0]
 
-            for i, pdf_file in enumerate(pdf_files, start=1):
-                status_text.text(f"Processing {pdf_file} ({i}/{total_files})...")
-
-                with zip_ref.open(pdf_file) as file:
-                    invoice_df, invoice_number, pic_number, freight, gst, total_tax, order_number, ship_to, skip = extract_invoice_data(file)
-
-                base_name = os.path.splitext(os.path.basename(pdf_file))[0]
-
-                if skip:
-                    summary_list.append({
-                        "Invoice File": base_name,
-                        "Invoice Number": invoice_number,
-                        "PIC Number": pic_number,
-                        "Order Number": order_number,
-                        "Ship To": ship_to,
-                        "Products in Invoice": 0,
-                        "Products Matched to PAF": 0,
-                        "Total Tax Included (Original)": total_tax,
-                        "Calculated Total Payable": 0
-                    })
-                    continue
-
-                merged_df = pd.merge(invoice_df, paf_df, left_on="Product", right_on="Valiant/RGR SKU", how="left")
-                merged_df["Units Per Case"] = pd.to_numeric(merged_df["Units Per Case"], errors="coerce")
-                merged_df["Quantity"] = pd.to_numeric(merged_df["Quantity"], errors="coerce")
-                merged_df["Total Quantity"] = merged_df["Quantity"] * merged_df["Units Per Case"]
-                merged_df["Unit Cost Price"] = merged_df["Gross Price"] / merged_df["Units Per Case"]
-
-                final_df = merged_df[["GlobalTill SKU", "Total Quantity", "Unit Cost Price"]].copy()
-                final_df.rename(columns={
-                    "GlobalTill SKU": "SKU",
-                    "Total Quantity": "Total Quantity",
-                    "Unit Cost Price": "Unit Cost Price"
-                }, inplace=True)
-
-                wb = load_workbook("uploaded_template.xlsx")
-                ws = wb.active
-
-                ws["B6"].value = freight
-                ws["B7"].value = "rgr canada"
-                ws["B8"].value = f"{invoice_number}/{pic_number}"
-                ws["B9"].value = 0
-                ws["B10"].value = gst
-                ws["B11"].value = 0
-
-                start_row = 14
-                for idx, product in final_df.iterrows():
-                    ws[f"A{start_row + idx}"] = product["SKU"]
-                    ws[f"B{start_row + idx}"] = product["Total Quantity"]
-                    ws[f"C{start_row + idx}"] = round(float(product["Unit Cost Price"]), 2)
-
-                final_invoice_path = os.path.join(final_invoice_folder, f"{base_name}_final_invoice.xlsx")
-                wb.save(final_invoice_path)
-
-                product_count_invoice = len(invoice_df)
-                product_count_processed = final_df["SKU"].notna().sum()
-
-                sumproduct = (merged_df["Total Quantity"] * merged_df["Unit Cost Price"]).sum()
-                calculated_total = sumproduct + gst + freight
-
+            if skip:
                 summary_list.append({
                     "Invoice File": base_name,
                     "Invoice Number": invoice_number,
                     "PIC Number": pic_number,
                     "Order Number": order_number,
                     "Ship To": ship_to,
-                    "Products in Invoice": product_count_invoice,
-                    "Products Matched to PAF": product_count_processed,
+                    "Products in Invoice": 0,
+                    "Products Matched to PAF": 0,
                     "Total Tax Included (Original)": total_tax,
-                    "Calculated Total Payable": round(calculated_total, 2)
+                    "Calculated Total Payable": 0
                 })
+                continue
 
-                progress_bar.progress(i / total_files)
+            merged_df = pd.merge(invoice_df, paf_df, left_on="Product", right_on="Valiant/RGR SKU", how="left")
+            merged_df["Units Per Case"] = pd.to_numeric(merged_df["Units Per Case"], errors="coerce")
+            merged_df["Quantity"] = pd.to_numeric(merged_df["Quantity"], errors="coerce")
+            merged_df["Total Quantity"] = merged_df["Quantity"] * merged_df["Units Per Case"]
+            merged_df["Unit Cost Price"] = merged_df["Gross Price"] / merged_df["Units Per Case"]
 
-            summary_df = pd.DataFrame(summary_list)
-            summary_df.to_excel(summary_file, index=False)
+            final_df = merged_df[["GlobalTill SKU", "Total Quantity", "Unit Cost Price"]].copy()
+            final_df.rename(columns={
+                "GlobalTill SKU": "SKU",
+                "Total Quantity": "Total Quantity",
+                "Unit Cost Price": "Unit Cost Price"
+            }, inplace=True)
 
-            st.success("✅ Processing Complete!")
+            wb = load_workbook("uploaded_template.xlsx")
+            ws = wb.active
 
-            with open(summary_file, "rb") as f:
-                st.download_button("Download Summary Report", f, "Summary_Report.xlsx")
+            ws["B6"].value = freight
+            ws["B7"].value = "rgr canada"
+            ws["B8"].value = f"{invoice_number}/{pic_number}"
+            ws["B9"].value = 0
+            ws["B10"].value = gst
+            ws["B11"].value = 0
 
-            st.write("### Download Final Invoices (individually or all together)")
+            start_row = 14
+            for idx, product in final_df.iterrows():
+                ws[f"A{start_row + idx}"] = product["SKU"]
+                ws[f"B{start_row + idx}"] = product["Total Quantity"]
+                ws[f"C{start_row + idx}"] = round(float(product["Unit Cost Price"]), 2)
 
+            final_invoice_path = os.path.join(final_invoice_folder, f"{base_name}_final_invoice.xlsx")
+            wb.save(final_invoice_path)
+
+            product_count_invoice = len(invoice_df)
+            product_count_processed = final_df["SKU"].notna().sum()
+
+            sumproduct = (merged_df["Total Quantity"] * merged_df["Unit Cost Price"]).sum()
+            calculated_total = sumproduct + gst + freight
+
+            summary_list.append({
+                "Invoice File": base_name,
+                "Invoice Number": invoice_number,
+                "PIC Number": pic_number,
+                "Order Number": order_number,
+                "Ship To": ship_to,
+                "Products in Invoice": product_count_invoice,
+                "Products Matched to PAF": product_count_processed,
+                "Total Tax Included (Original)": total_tax,
+                "Calculated Total Payable": round(calculated_total, 2)
+            })
+
+            progress_bar.progress(i / total_files)
+
+        summary_df = pd.DataFrame(summary_list)
+        summary_df.to_excel(summary_file, index=False)
+
+        st.success("✅ Processing Complete!")
+
+        with open(summary_file, "rb") as f:
+            st.download_button("Download Summary Report", f, "Summary_Report.xlsx")
+
+        st.write("### Download Final Invoices (individually or all together)")
+
+        for fname in os.listdir(final_invoice_folder):
+            if fname.endswith(".xlsx"):
+                path = os.path.join(final_invoice_folder, fname)
+                with open(path, "rb") as f:
+                    st.download_button(f"Download {fname}", f, fname, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+        zip_buffer = io.BytesIO()
+        with ZipFile(zip_buffer, "w") as zipf:
             for fname in os.listdir(final_invoice_folder):
-                if fname.endswith(".xlsx"):
-                    path = os.path.join(final_invoice_folder, fname)
-                    with open(path, "rb") as f:
-                        st.download_button(f"Download {fname}", f, fname, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                zipf.write(os.path.join(final_invoice_folder, fname), arcname=fname)
+        zip_buffer.seek(0)
 
-            zip_buffer = io.BytesIO()
-            with ZipFile(zip_buffer, "w") as zipf:
-                for fname in os.listdir(final_invoice_folder):
-                    zipf.write(os.path.join(final_invoice_folder, fname), arcname=fname)
-            zip_buffer.seek(0)
-
-            st.download_button(
-                label="Download All Final Invoices (ZIP)",
-                data=zip_buffer,
-                file_name="Final_Invoices.zip",
-                mime="application/zip"
-            )
+        st.download_button(
+            label="Download All Final Invoices (ZIP)",
+            data=zip_buffer,
+            file_name="Final_Invoices.zip",
+            mime="application/zip"
+        )
