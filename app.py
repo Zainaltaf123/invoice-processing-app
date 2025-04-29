@@ -2,9 +2,9 @@ import streamlit as st
 import pandas as pd
 import os
 import zipfile
-import shutil
 from io import BytesIO
-import re
+import shutil
+import PyPDF2
 
 st.set_page_config(layout="wide")
 
@@ -12,11 +12,11 @@ st.title("Valiant PAF Invoice Validation Tool")
 
 # --- File Upload ---
 paf_file = st.file_uploader("Upload PAF File", type=["xlsx"])
-invoice_files = st.file_uploader("Upload Invoice Excel Files", accept_multiple_files=True, type=["xlsx"])
+invoice_file = st.file_uploader("Upload Invoice Files (PDF or ZIP)", accept_multiple_files=True, type=["pdf", "zip"])
 template_file = st.file_uploader("Upload Invoice Template File", type=["xlsx"])
 
 if st.button("Process Files"):
-    if not (paf_file and invoice_files and template_file):
+    if not (paf_file and invoice_file and template_file):
         st.error("Please upload all files (PAF, Invoices, Template).")
     else:
         st.success("Processing...")
@@ -36,118 +36,49 @@ if st.button("Process Files"):
         # For mismatch tabs in summary
         mismatch_invoice_dfs = {}
 
-        for invoice_file in invoice_files:
-            invoice_filename = invoice_file.name
-            invoice_shortname = os.path.splitext(invoice_filename)[0]
+        # Process each uploaded file
+        for uploaded_file in invoice_file:
+            invoice_filename = uploaded_file.name
 
-            # Load invoice
-            invoice_df = pd.read_excel(invoice_file)
+            # Check if file is a ZIP
+            if invoice_filename.endswith('.zip'):
+                with zipfile.ZipFile(uploaded_file, 'r') as zip_ref:
+                    zip_ref.extractall('temp_excels')
+                # Find extracted PDF files
+                pdf_files = [f for f in os.listdir('temp_excels') if f.endswith('.pdf')]
+                for pdf_file in pdf_files:
+                    with open(f'temp_excels/{pdf_file}', 'rb') as f:
+                        pdf_data = f.read()
+                        # Process this PDF file as if it was uploaded directly
+                        invoice_df = process_pdf(pdf_data)
 
-            try:
-                header_info = invoice_df.iloc[0:7].copy()
-                invoice_number = str(header_info.iloc[0, 1])
-                pic_number = str(header_info.iloc[1, 1])
-                order_number = str(header_info.iloc[2, 1])
-                ship_to = str(header_info.iloc[3, 1])
-                freight = float(header_info.iloc[5, 1])
-                tax = float(header_info.iloc[6, 1])
-            except Exception as e:
-                st.error(f"Header extraction error in {invoice_filename}: {e}")
-                continue
+                        # Now extract data as needed from the PDF invoice
+                        process_invoice_data(invoice_df, invoice_filename, paf_df, summary_data, missing_products_all, mismatch_invoice_dfs)
+            else:
+                # If it's a PDF file, process directly
+                with open(uploaded_file, 'rb') as f:
+                    pdf_data = f.read()
+                    invoice_df = process_pdf(pdf_data)
 
-            # Extract product data from row 10 onwards
-            product_data = invoice_df.iloc[9:].dropna(subset=["Product Description"])
-            product_data = product_data[["Product Description", "Qty", "Gross Price"]].copy()
-            product_data.columns = ["Product Description", "Qty", "Gross Price"]
-            product_data["Qty"] = pd.to_numeric(product_data["Qty"], errors="coerce").fillna(0)
-
-            # Match products to PAF
-            matched = []
-            missing = []
-
-            for _, row in product_data.iterrows():
-                desc = str(row["Product Description"]).strip().upper()
-                qty = row["Qty"]
-                gross = row["Gross Price"]
-
-                matched_row = paf_df[paf_df["Product Description"].str.upper().str.strip() == desc]
-                if not matched_row.empty:
-                    sku = matched_row["Valiant/RGR SKU"].values[0]
-                    unit_cost = matched_row["Unit Cost"].values[0]
-                    matched.append({
-                        "Valiant/RGR SKU": sku,
-                        "Quantity": qty,
-                        "Unit Cost": unit_cost,
-                        "Product Description": desc
-                    })
-                else:
-                    missing.append({
-                        "Invoice File": invoice_filename,
-                        "Product Code": "",
-                        "Description": desc,
-                        "Quantity": qty,
-                        "Gross Price": gross
-                    })
-
-            matched_df = pd.DataFrame(matched)
-            recalculated_total = (matched_df["Quantity"] * matched_df["Unit Cost"]).sum() + freight + tax
-            original_total = (product_data["Qty"] * product_data["Gross Price"]).sum() + freight + tax
-
-            summary_data.append({
-                "Invoice File": invoice_filename,
-                "Invoice Number": invoice_number,
-                "PIC Number": pic_number,
-                "Order Number": order_number,
-                "Ship To": ship_to,
-                "Product Count (Invoice)": len(product_data),
-                "Product Count (Matched)": len(matched_df),
-                "Original Total": round(original_total, 2),
-                "Recalculated Total": round(recalculated_total, 2),
-            })
-
-            missing_products_all.extend(missing)
-
-            # Save mismatched final_invoice for summary file if counts differ
-            if len(product_data) != len(matched_df):
-                sheet_name = f"{invoice_shortname} — Final_Invoice"
-                # Ensure sheet name doesn't exceed Excel's 31-character limit
-                sheet_name = sheet_name[:31]
-                mismatch_invoice_dfs[sheet_name] = matched_df
-
-            # --- Create Final Invoice Excel ---
-            template_xl = pd.read_excel(template_file, sheet_name=None)
-            new_invoice = template_xl.copy()
-
-            for sheet in new_invoice:
-                df = new_invoice[sheet]
-                df.replace("{{Invoice Number}}", invoice_number, inplace=True)
-                df.replace("{{PIC Number}}", pic_number, inplace=True)
-                df.replace("{{Order Number}}", order_number, inplace=True)
-                df.replace("{{Ship To}}", ship_to, inplace=True)
-                df.replace("{{Freight}}", freight, inplace=True)
-                df.replace("{{Tax}}", tax, inplace=True)
-
-            # Insert matched_df into "Products" sheet
-            if "Products" in new_invoice:
-                new_invoice["Products"] = matched_df
-
-            output_path = f"final_invoice_output/{invoice_shortname}_final_invoice.xlsx"
-            with pd.ExcelWriter(output_path) as writer:
-                for sheet, df in new_invoice.items():
-                    df.to_excel(writer, sheet_name=sheet, index=False)
+                    # Now extract data as needed from the PDF invoice
+                    process_invoice_data(invoice_df, invoice_filename, paf_df, summary_data, missing_products_all, mismatch_invoice_dfs)
 
         # --- Create Summary Report ---
         summary_df = pd.DataFrame(summary_data)
         missing_df = pd.DataFrame(missing_products_all)
 
         summary_path = "invoice_summary.xlsx"
-        with pd.ExcelWriter(summary_path) as writer:
+        with pd.ExcelWriter(summary_path, engine="openpyxl", mode="w") as writer:
+            # Existing outputs
             summary_df.to_excel(writer, sheet_name="Summary Report", index=False)
             missing_df.to_excel(writer, sheet_name="Missing Products", index=False)
             paf_df.to_excel(writer, sheet_name="PAF Data", index=False)
 
-            # Add mismatch final invoice tabs
-            for sheet_name, mismatch_df in mismatch_invoice_dfs.items():
+            # Additional mismatch tabs
+            for invoice_filename, mismatch_df in mismatch_invoice_dfs.items():
+                # Ensure safe sheet name
+                sheet_name = invoice_filename.replace(".pdf", "").strip() + " — Final_Invoice"
+                sheet_name = sheet_name[:31]  # Excel limit
                 mismatch_df.to_excel(writer, sheet_name=sheet_name, index=False)
 
         # --- Download Buttons ---
@@ -162,3 +93,89 @@ if st.button("Process Files"):
 
         with open(zip_filename, "rb") as f:
             st.download_button("Download All Final Invoices (ZIP)", data=f, file_name=zip_filename)
+
+# Function to process PDF invoices
+def process_pdf(pdf_data):
+    # Assuming you use PyPDF2 to read the PDF data (you might need to adjust this based on your needs)
+    pdf_reader = PyPDF2.PdfReader(BytesIO(pdf_data))
+    text = ""
+    for page in pdf_reader.pages:
+        text += page.extract_text()
+
+    # Convert text to DataFrame (you may need to adjust this)
+    invoice_df = pd.DataFrame({"Text": text.splitlines()})
+    return invoice_df
+
+# Function to process each invoice file and match products
+def process_invoice_data(invoice_df, invoice_filename, paf_df, summary_data, missing_products_all, mismatch_invoice_dfs):
+    try:
+        # Extract relevant data from invoice_df (implement your extraction logic)
+        header_info = invoice_df.iloc[0:7].copy()
+        invoice_number = str(header_info.iloc[0, 1])
+        pic_number = str(header_info.iloc[1, 1])
+        order_number = str(header_info.iloc[2, 1])
+        ship_to = str(header_info.iloc[3, 1])
+        freight = float(header_info.iloc[5, 1])
+        tax = float(header_info.iloc[6, 1])
+    except Exception as e:
+        st.error(f"Header extraction error in {invoice_filename}: {e}")
+        return
+
+    # Extract product data (this part might need to be adjusted for your invoice format)
+    product_data = invoice_df.iloc[9:].dropna(subset=["Product Description"])
+    product_data = product_data[["Product Description", "Qty", "Gross Price"]].copy()
+    product_data.columns = ["Product Description", "Qty", "Gross Price"]
+    product_data["Qty"] = pd.to_numeric(product_data["Qty"], errors="coerce").fillna(0)
+
+    # Match products to PAF
+    matched = []
+    missing = []
+
+    for _, row in product_data.iterrows():
+        desc = str(row["Product Description"]).strip().upper()
+        qty = row["Qty"]
+        gross = row["Gross Price"]
+
+        matched_row = paf_df[paf_df["Product Description"].str.upper().str.strip() == desc]
+        if not matched_row.empty:
+            sku = matched_row["Valiant/RGR SKU"].values[0]
+            unit_cost = matched_row["Unit Cost"].values[0]
+            matched.append({
+                "Valiant/RGR SKU": sku,
+                "Quantity": qty,
+                "Unit Cost": unit_cost,
+                "Product Description": desc
+            })
+        else:
+            missing.append({
+                "Invoice File": invoice_filename,
+                "Product Code": "",
+                "Description": desc,
+                "Quantity": qty,
+                "Gross Price": gross
+            })
+
+    matched_df = pd.DataFrame(matched)
+    recalculated_total = (matched_df["Quantity"] * matched_df["Unit Cost"]).sum() + freight + tax
+    original_total = (product_data["Qty"] * product_data["Gross Price"]).sum() + freight + tax
+
+    summary_data.append({
+        "Invoice File": invoice_filename,
+        "Invoice Number": invoice_number,
+        "PIC Number": pic_number,
+        "Order Number": order_number,
+        "Ship To": ship_to,
+        "Product Count (Invoice)": len(product_data),
+        "Product Count (Matched)": len(matched_df),
+        "Original Total": round(original_total, 2),
+        "Recalculated Total": round(recalculated_total, 2),
+    })
+
+    missing_products_all.extend(missing)
+
+    # Save mismatched final_invoice for summary file if counts differ
+    if len(product_data) != len(matched_df):
+        sheet_name = f"{invoice_filename} — Final_Invoice"
+        # Ensure sheet name doesn't exceed Excel's 31-character limit
+        sheet_name = sheet_name[:31]
+        mismatch_invoice_dfs[sheet_name] = matched_df
