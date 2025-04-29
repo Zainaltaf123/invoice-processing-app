@@ -45,8 +45,15 @@ def extract_invoice_data(file):
         invoice_number = inv_m.group(1) if inv_m else None
         pic_number = pic_m.group(1) if pic_m else None
 
-        order_number_match = re.search(r"Order Number\s+(\S+)", first_text)
-        order_number = order_number_match.group(1) if order_number_match else ""
+        order_number_lines = first_text.splitlines()
+        order_number = ""
+        for i, line in enumerate(order_number_lines):
+            if "Order Number" in line and i + 1 < len(order_number_lines):
+                next_line = order_number_lines[i + 1].strip()
+                if next_line.startswith("RGRHO") or next_line.startswith("CCAO"):
+                    order_number = next_line
+                    break
+
         if order_number.startswith("CCAO"):
             skip = True
 
@@ -175,7 +182,7 @@ if zip_file and paf_file and template_file:
                 wb.save(final_invoice_path)
 
                 product_count_invoice = len(invoice_df)
-                product_count_processed = merged_df["SKU"].notna().sum() if "SKU" in merged_df.columns else 0
+                product_count_processed = merged_df["GlobalTill SKU"].notna().sum()
 
                 sumproduct = (merged_df["Total Quantity"] * merged_df["Unit Cost Price"]).sum()
                 calculated_total = sumproduct + gst + freight
