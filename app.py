@@ -33,10 +33,12 @@ if st.button("Process Files"):
         summary_data = []
         missing_products_all = []
 
-        mismatch_dfs = {}  # For mismatch tabs
+        # For mismatch tabs in summary
+        mismatch_invoice_dfs = {}
 
         for invoice_file in invoice_files:
             invoice_filename = invoice_file.name
+            invoice_shortname = os.path.splitext(invoice_filename)[0]
 
             # Load invoice
             invoice_df = pd.read_excel(invoice_file)
@@ -105,9 +107,12 @@ if st.button("Process Files"):
 
             missing_products_all.extend(missing)
 
-            # Add mismatch tab logic
+            # Save mismatched final_invoice for summary file if counts differ
             if len(product_data) != len(matched_df):
-                mismatch_dfs[f"Mismatch_{invoice_filename}"] = matched_df
+                sheet_name = f"{invoice_shortname} — Final_Invoice"
+                # Ensure sheet name doesn't exceed Excel's 31-character limit
+                sheet_name = sheet_name[:31]
+                mismatch_invoice_dfs[sheet_name] = matched_df
 
             # --- Create Final Invoice Excel ---
             template_xl = pd.read_excel(template_file, sheet_name=None)
@@ -122,11 +127,11 @@ if st.button("Process Files"):
                 df.replace("{{Freight}}", freight, inplace=True)
                 df.replace("{{Tax}}", tax, inplace=True)
 
-            # Insert matched_df into the right place (assuming there's a sheet named "Products")
+            # Insert matched_df into "Products" sheet
             if "Products" in new_invoice:
                 new_invoice["Products"] = matched_df
 
-            output_path = f"final_invoice_output/{os.path.splitext(invoice_filename)[0]}_final_invoice.xlsx"
+            output_path = f"final_invoice_output/{invoice_shortname}_final_invoice.xlsx"
             with pd.ExcelWriter(output_path) as writer:
                 for sheet, df in new_invoice.items():
                     df.to_excel(writer, sheet_name=sheet, index=False)
@@ -141,11 +146,11 @@ if st.button("Process Files"):
             missing_df.to_excel(writer, sheet_name="Missing Products", index=False)
             paf_df.to_excel(writer, sheet_name="PAF Data", index=False)
 
-            # Add mismatch sheets
-            for sheet_name, mismatch_df in mismatch_dfs.items():
-                mismatch_df.to_excel(writer, sheet_name=sheet_name[:31], index=False)  # Excel max sheet name = 31 chars
+            # Add mismatch final invoice tabs
+            for sheet_name, mismatch_df in mismatch_invoice_dfs.items():
+                mismatch_df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-        # --- Download Link ---
+        # --- Download Buttons ---
         with open(summary_path, "rb") as f:
             st.download_button("Download Invoice Summary", data=f, file_name="invoice_summary.xlsx")
 
