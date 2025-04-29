@@ -45,14 +45,13 @@ def extract_invoice_data(file):
         invoice_number = inv_m.group(1) if inv_m else None
         pic_number = pic_m.group(1) if pic_m else None
 
-        order_number_lines = first_text.splitlines()
+        # NEW robust logic for order number
         order_number = ""
-        for i, line in enumerate(order_number_lines):
-            if "Order Number" in line and i + 1 < len(order_number_lines):
-                next_line = order_number_lines[i + 1].strip()
-                if next_line.startswith("RGRHO") or next_line.startswith("CCAO"):
-                    order_number = next_line
-                    break
+        for line in first_text.splitlines():
+            match = re.search(r"\b(RGRHO\w+|CCAO\w+)\b", line)
+            if match:
+                order_number = match.group(1)
+                break
 
         if order_number.startswith("CCAO"):
             skip = True
@@ -115,10 +114,7 @@ if zip_file and paf_file and template_file:
         paf_df.columns = paf_df.columns.str.strip()
         paf_df = paf_df.drop_duplicates(subset=["Valiant/RGR SKU"])
 
-        zip_path = "uploaded_invoices.zip"
-        template_path = "uploaded_template.xlsx"
-
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        with zipfile.ZipFile("uploaded_invoices.zip", 'r') as zip_ref:
             pdf_files = [f for f in zip_ref.namelist() if f.lower().endswith('.pdf')]
             total_files = len(pdf_files)
 
@@ -162,7 +158,7 @@ if zip_file and paf_file and template_file:
                     "Unit Cost Price": "Unit Cost Price"
                 }, inplace=True)
 
-                wb = load_workbook(template_path)
+                wb = load_workbook("uploaded_template.xlsx")
                 ws = wb.active
 
                 ws["B6"].value = freight
@@ -182,7 +178,7 @@ if zip_file and paf_file and template_file:
                 wb.save(final_invoice_path)
 
                 product_count_invoice = len(invoice_df)
-                product_count_processed = merged_df["GlobalTill SKU"].notna().sum()
+                product_count_processed = final_df["SKU"].notna().sum()
 
                 sumproduct = (merged_df["Total Quantity"] * merged_df["Unit Cost Price"]).sum()
                 calculated_total = sumproduct + gst + freight
