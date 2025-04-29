@@ -203,7 +203,7 @@ if (zip_file or pdf_file) and paf_file and template_file:
             })
 
             # Add missing products
-            missing_products = merged_df[merged_df["SKU"].isna()]
+            missing_products = merged_df[merged_df["GlobalTill SKU"].isna()]
             for idx, row in missing_products.iterrows():
                 missing_products_list.append({
                     "Invoice File": base_name,
