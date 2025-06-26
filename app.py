@@ -100,8 +100,8 @@ def extract_invoice_data(file):
             if m:
                 order_number = m.group(1)
                 break
-        if order_number and order_number.startswith("CCAO"):
-            skip=True
+        # if order_number and order_number.startswith("CCAO"):
+        #     skip=True
 
         # capture Ship To block for summary
         ship_to_lines = re.findall(r"Ship To\s*\n(.*?)\n(.*?)\n", first_text, re.DOTALL)
