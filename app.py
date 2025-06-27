@@ -100,7 +100,7 @@ def extract_invoice_data(file):
             if m:
                 order_number = m.group(1)
                 break
-         if order_number and order_number.startswith("CCAO"):
+        if order_number and order_number.startswith("CCAO"):
             skip=True
 
         # capture Ship To block for summary
