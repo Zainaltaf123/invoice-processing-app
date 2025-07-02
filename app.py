@@ -184,7 +184,7 @@ if (zip_file or pdf_file) and paf_file and template_file:
             merged=pd.merge(df,paf_df,left_on="Product",right_on="Valiant/RGR SKU",how="left")
             merged["Units Per Case"]=pd.to_numeric(merged["Units Per Case"],errors="coerce")
             merged["Total Quantity"]=merged["Quantity"]*merged["Units Per Case"]
-            merged["Unit Cost Price"]=merged["Gross Price"]/merged["Units Per Case"]
+            merged["Unit Cost Price"]=merged["Gross Price"]/merged["Units Per Case"] + 0.0000001
 
             final=merged[["GlobalTill SKU","Total Quantity","Unit Cost Price"]].copy()
             final.columns=["SKU","Total Quantity","Unit Cost Price"]
